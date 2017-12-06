@@ -4,6 +4,7 @@ var http = require('http');
 var fs = require('fs');
 var request = require("tinyreq");
 var cheerio = require("cheerio");
+const { URL } = require('url');
 var message = `
     test5
 `;
@@ -13,7 +14,8 @@ var adRequirements = {
     max_rooms: 2,
     max_rent: 10000, 
 }
-var scrapeUrl = 'https://www.blocket.se/bostad/uthyres?cg_multi=3020&sort=&ss=&se=&ros=&roe=&bs=&be=&mre=&q=&q=&q=&is=1&save_search=1&l=0&md=th&f=p&f=c&f=b&ca=14&as=179_5&w=115';
+//var scrapeUrl = 'https://www.blocket.se/bostad/uthyres?cg_multi=3020&sort=&ss=&se=&ros=&roe=&bs=&be=&mre=&q=&q=&q=&is=1&save_search=1&l=0&md=th&f=p&f=c&f=b&ca=14&as=179_5&w=115';
+var scrapeUrl = 'https://www.blocket.se/ostergotland?q=borttappad+rosa+pl%C3%A5nbok&cg=0&w=1&st=s&c=&ca=14&is=1&l=0&md=th';
 var interval = 10000;
 
 function PostCode(cookie, referer, id, ik) {
@@ -86,29 +88,48 @@ function getCookie() {
 }
 
 function scrape(url) {
-    request(url, function (err, body) {
-        console.log(err || body); // Print out the HTML
-        return err || body;
+    return new Promise((resolve, reject) => {
+        request(url, function (err, body) {
+            if(err){
+                reject(err);
+            }
+            else {
+                resolve(body);
+            }
+        });
     });
 }
 
 function scrapeWithCookie(url){
-    tinyreq({
-        url: url,
-        headers: {
-            "Cookie": getCookie()
-        }
-    }).then(body => {
-        return body;
-    }).catch(err => {
-        console.log(err);
+    return new Promise((resolve, reject) => {
+        request({
+            url: url,
+            headers: {
+                'Upgrade-Insecure-Requests': 1,
+                'Referer': 'https://www.blocket.se/ostergotland?q=borttappad+rosa+pl%C3%A5nbok&cg=0&w=1&st=s&c=&ca=14&is=1&l=0&md=th',
+                'Accept': 'application/json, text/javascript, */*; q=0.01',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/62.0.3202.94 Safari/537.36',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'Accept-Language': 'sv-SE,sv;q=0.9,en-US;q=0.8,en;q=0.7',
+                "Cookie": getCookie(),
+                "X-DevTools-Emulate-Network-Conditions-Client-Id": '481af6b1-64fd-4699-bd92-d87dd7527535'
+            }
+        }).then(body => {
+            //console.log(body);
+            resolve(body);
+        }).catch(err => {
+            console.log(err);
+            reject(err);
+        });
     });
 }
 
 function sortData(data) {
+    //console.log(data);
     var $ = cheerio.load(data);
     var ads = [];
     var ad = {};
+    //console.log(data)
     $("#item_list article").each(function(){
         ad = {};
         ad.rooms = parseInt($(this).find('.details .room').text());
@@ -116,6 +137,10 @@ function sortData(data) {
         ad.url = $(this).find('.media-heading .item_link').attr('href');
         ad.id = parseInt($(this).attr('id'));
         ad.ik = getAdIk(ad.url);
+        if(ad.id.length && ad.ik.length){
+            ad.id = '76814715';
+            ad.ik = '52983fdca19f870ee5ea15e8a8893d3a6392902b';
+        }
         ads.push(ad);
     });
     return ads;
@@ -132,25 +157,31 @@ function validateAd(ad) {
 }
 
 function checkForNewAds() {
-    var ads = sortData(scrape(scrapeUrl));
-    var newAds = [];
-    ads.forEach(function(){
-        if(!adExists(this.url)){
-            newAds.push(this);
-        }
-    });
-    if(newAds.length){
-        console.log(newAds.length,' New ads found');
-        newAds.forEach(function(){
-            if(validateAd(this)){
-                console.log('Valid Ad. Starting send process...');
-                PostCode(cookie, this.url, this.id, this.ik);
-            }
+    console.log('Checking for new ads');
+    var data = scrape(scrapeUrl).then((body) => {
+        var ads = sortData(body);
+        var newAds = [];
+        ads.forEach(function(){
+            //if(!adExists(this.url)){
+                newAds.push(this);
+            //}
         });
+        if(newAds.length){
+            console.log(newAds.length,' New ads found');
+            newAds.forEach(function(ad){
+                //if(validateAd(this)){
+                    console.log('Valid Ad. Starting send process...');
+                    if(ad.url.length && ad.id.length && ad.ik.length){
+                        console.log('missing data');
+                    }
+                    PostCode(getCookie(), ad.url, ad.id, ad.ik);
+                //}
+            });
+            return;
+        }
+        console.log('No new ads found.');
         return;
-    }
-    console.log('No new ads found.');
-    return;
+    });
 }
 
 function adExists(url) {
@@ -160,13 +191,24 @@ function adExists(url) {
 }
 
 function getAdIk(url){
-    var data = scrapeWithCookie(url);
-    var $ = cheerio.load(data);
-    var ik = $('.modal-body input[name="ik"]').attr('value');
-    return ik;
+    var data = scrapeWithCookie(url).then((body) => {
+        var $ = cheerio.load(body);
+        var href = $('#contact_link').attr('href');
+        var _data = scrapeWithCookie(href).then((body) => {
+            var $ = cheerio.load(body);
+            var ik = $('.ad_reply_form input[name="ik"]').attr('value');
+            return ik;
+        });
+        //var url = new URL(link);
+        //var ik = url.searchParams.get("list_id");
+        
+    });
 }
+var oldAds;
+var data = scrape(scrapeUrl).then((body) => {
+    oldAds = sortData(body);
+    console.log(oldAds.length, ' old Ads saved.');
+    console.log('Checking for new adds every ' + interval/1000 + ' seconds.');
+    var taskRuner = setInterval(checkForNewAds, interval);
+});
 
-var oldAds = sortData(scrape(scrapeUrl));
-console.log(oldAds.length, ' old Ads saved.')
-console.log('Checking for new adds every ' + interval/1000 + ' seconds.');
-var taskRuner = setInterval(checkForNewAds, interval);
