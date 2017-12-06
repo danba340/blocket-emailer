@@ -2,9 +2,18 @@
 var querystring = require('querystring');
 var http = require('http');
 var fs = require('fs');
+var request = require("tinyreq");
+var cheerio = require("cheerio");
 var message = `
     test5
 `;
+var oldAds = [];
+var adRequirements = {
+    min_rooms: 1,
+    max_rooms: 2,
+    max_rent: 10000, 
+}
+var scrapeUrl = '';
 
 function PostCode(cookie) {
   // Build the post string from an object
@@ -52,23 +61,61 @@ function PostCode(cookie) {
 
 }
 
-// This is an async file read
-fs.readFile('cookie.txt', 'utf-8', function (err, data) {
-  if (err) {
-    // If this were just a small part of the application, you would
-    // want to handle this differently, maybe throwing an exception
-    // for the caller to handle. Since the file is absolutely essential
-    // to the program's functionality, we're going to exit with a fatal
-    // error instead.
-    console.log("FATAL An error occurred trying to read in the file: " + err);
-    process.exit(-2);
-  }
-  // Make sure there's data before we post it
-  if(data) {
-    PostCode(data);
-  }
-  else {
-    console.log("No data to post");
-    process.exit(-1);
-  }
-});
+function getCookie() {
+    // This is an async file read
+    fs.readFile('cookie.txt', 'utf-8', function (err, data) {
+    if (err) {
+        // If this were just a small part of the application, you would
+        // want to handle this differently, maybe throwing an exception
+        // for the caller to handle. Since the file is absolutely essential
+        // to the program's functionality, we're going to exit with a fatal
+        // error instead.
+        console.log("FATAL An error occurred trying to read in the file: " + err);
+        process.exit(-2);
+    }
+    // Make sure there's data before we post it
+    if(data) {
+        return data;
+    }
+    else {
+        console.log("No data to post");
+        process.exit(-1);
+    }
+    });
+}
+
+function scrape(url) {
+    request(url, function (err, body) {
+        console.log(err || body); // Print out the HTML
+        return err || body;
+    });
+}
+
+function sortData(data) {
+    var $ = cheerio.load(data);
+    var ads = [];
+    var ad = {};
+    $("#item_list article").each(function(){
+        ad = {};
+        ad.rooms = parseInt($(this).find('.details .room').text());
+        ad.rent = parseInt($(this).find('.details .monthly_rent').text());
+        ads.push(ad);
+    });
+    return ads;
+}
+
+function validateAd(ad) {
+    if( adRequirements.min_rooms >= ad.rooms || 
+        adRequirements.max_rooms <= ad.rooms ||
+        adRequirements.max_rent >= ad.rent
+    ){
+        return false;
+    }
+    return true;
+}
+
+var ad = sortData(scrape(scrapeUrl));
+
+if(validateAd(ad)) {
+    PostCode(getCookie());
+}
